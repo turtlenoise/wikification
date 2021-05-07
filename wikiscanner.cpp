@@ -3,7 +3,7 @@
 WikiArticleScanner::WikiArticleScanner(const std::string& documentName) {
     pugi::xml_parse_result result = m_xmlDocument.load_file("smalltext.xml");
     if (!result) {
-        throw std::invalid_argument("smalltext.xml could not be opened.");
+        throw std::invalid_argument("enwiki-20061130-pages-articles.xml could not be opened.");
     }
 }
 
@@ -16,13 +16,20 @@ std::set<std::string> WikiArticleScanner::getKeyWordsPerArticle(const wiki_artic
             std::string processedWord = wordToken;
             processedWord.erase(remove(processedWord.begin(), processedWord.end(), '['), processedWord.end());
             processedWord.erase(remove(processedWord.begin(), processedWord.end(), ']'), processedWord.end());
-            keyWordsPerArticle.insert(toLower(processedWord));
+            keyWordsPerArticle.insert(processedWord);
         }
     }
     return keyWordsPerArticle;
 }
 
-void WikiArticleScanner::parseArticles() {
+std::string WikiArticleScanner::toLower(std::string& s) {
+    std::transform(s.begin(), s.end(), s.begin(), 
+                   [](unsigned char c){ return std::tolower(c); } 
+                  );
+    return s;
+}
+
+wiki_article_t WikiArticleScanner::getFirstArticle() {
     for (pugi::xml_node page: m_xmlDocument.child("mediawiki").children("page"))
     {
         std::string title = page.child("title").child_value();
@@ -38,19 +45,12 @@ void WikiArticleScanner::parseArticles() {
             wiki_article_t wikiArticle = {
                 pageID,
                 title,
-                text,
-                processedText
+                toLower(text),
+                toLower(processedText)
             };
-            m_wikipediaArticles.push_back(std::make_unique<wiki_article_t>(wikiArticle));
+            return wikiArticle;
         }    
     }
-}
-
-std::unique_ptr<wiki_article_t> WikiArticleScanner::getArticleAt(const int64_t position) {
-    if (position > m_wikipediaArticles.size() || position < 0) {
-        throw std::out_of_range("no element exists at the " + std::to_string(position) + ". position.");
-    }
-    return std::move(m_wikipediaArticles[position]);
 }
 
 template<typename Iterator>
@@ -59,67 +59,63 @@ bool alreadyInTheMap(std::pair<Iterator, bool> const& insertionResult)
     return !insertionResult.second;
 }
 
-std::string WikiArticleScanner::toLower(std::string& s) {
-    std::transform(s.begin(), s.end(), s.begin(), 
-                   [](unsigned char c){ return std::tolower(c); } 
-                  );
-    return s;
-}
-
-void WikiArticleScanner::performTF() {
-    std::stringstream textStream(m_wikiArticle.processed_text_);
+void WikiArticleScanner::performTF(const wiki_article_t& wikiArticle) {
+    std::stringstream textStream(wikiArticle.processed_text_);
     std::string wordToken;
 
     while (getline(textStream, wordToken, ' ')) {
         if (wordToken.empty()) {
             wordToken = "";
         }
-        auto&& insertionResult = m_termFrequencies.insert({toLower(wordToken),1});
+        auto&& insertionResult = m_termFrequencies.insert({wordToken,1});
         if (alreadyInTheMap(insertionResult)) {
             ++m_termFrequencies[wordToken];
         }
     }
 }
 
-void WikiArticleScanner::performIDF() {
+void WikiArticleScanner::performIDFPerDocument(const std::string& processedText, const std::string& text) {
     for (std::map<std::string, int64_t>::const_iterator termIter = m_termFrequencies.begin(); termIter != m_termFrequencies.end(); ++termIter) {
         const std::string& word = termIter->first;
 
-        for (std::vector<std::unique_ptr<wiki_article_t>>::const_iterator wikiDocsIter = 
-        m_wikipediaArticles.begin(); wikiDocsIter != m_wikipediaArticles.end(); ++wikiDocsIter) {
-            if (wikiDocsIter->get() != nullptr) {
-                const wiki_article_t& wikiArticle = *wikiDocsIter->get();
-                std::string::size_type found = wikiArticle.processed_text_.find(word);
-                if (found != std::string::npos) {
-                    auto&& insertionResult = m_wordFrequencyIDF.insert({word,1});
-                    if (alreadyInTheMap(insertionResult)) {
-                        ++m_wordFrequencyIDF[word];
-                    }
-                } else {
-                    m_wordFrequencyIDF.insert({word,0});
-                }
+        std::string::size_type found = processedText.find(word);
+        if (found != std::string::npos) {
+            auto&& insertionResult = m_wordFrequency.insert({word,1});
+            if (alreadyInTheMap(insertionResult)) {
+                ++m_wordFrequency[word];
             }
+        } else {
+            m_wordFrequency.insert({word,0});
+        }
+
+        std::string::size_type foundKeyWord = text.find("[[" + word + "]]");
+        if (foundKeyWord != std::string::npos) {
+            auto&& insertionResult = m_keywordFrequency.insert({word,1});
+            if (alreadyInTheMap(insertionResult)) {
+                ++m_keywordFrequency[word];
+            }
+        } else {
+            m_keywordFrequency.insert({word,0});
         }
     }
 }
 
-void WikiArticleScanner::performTFIDF() {
-    const int64_t numberOfAllDocuments = m_wikipediaArticles.size();    
+void WikiArticleScanner::performTFIDF(int64_t numberOfArticles) {
     for (auto&& termIter = m_termFrequencies.begin(); termIter != m_termFrequencies.end(); ++termIter) {
         const std::string& word = termIter->first;
-        if (m_wordFrequencyIDF[word] > 0) {
-            const double tfIdfPerWord = m_termFrequencies[word] * log(numberOfAllDocuments/m_wordFrequencyIDF[word]);
+        if (m_wordFrequency[word] > 0) {
+            const double tfIdfPerWord = m_termFrequencies[word] * log(numberOfArticles/m_wordFrequency[word]);
             m_tfIdfScoreForWords.insert({word, tfIdfPerWord});
         } else {
         	// TODO: ?
         	double eps = 1e-6;
-            const double tfIdfPerWord = m_termFrequencies[word] * log(numberOfAllDocuments/eps);        	
+            const double tfIdfPerWord = m_termFrequencies[word] * log(numberOfArticles/eps);        	
             m_tfIdfScoreForWords.insert({word, tfIdfPerWord});
         }
     }
 }
 
-std::set<std::string>  WikiArticleScanner::getTfIdfKeyWordSet() {
+std::set<std::string>  WikiArticleScanner::getTfIdfKeywords() {
     std::set<std::string> keywords;
     std::multimap<int64_t,std::string> tfIdfScores;
     for (auto&& tfIdfIter = m_tfIdfScoreForWords.begin(); tfIdfIter != m_tfIdfScoreForWords.end(); ++tfIdfIter) {
@@ -138,15 +134,6 @@ std::set<std::string>  WikiArticleScanner::getTfIdfKeyWordSet() {
     return keywords;
 }
 
-std::set<std::string> WikiArticleScanner::getTfIdfKeywords(const wiki_article_t& wikiArticle) {
-    m_wikiArticle = wikiArticle;
-    performTF();
-    performIDF();
-    performTFIDF();
-    std::set<std::string> keyWords = getTfIdfKeyWordSet();
-    return keyWords;
-}
-
 double WikiArticleScanner::accuracyOfKeyWordPrediction(const std::set<std::string>& predictedSet, const std::set<std::string>& actualSet) {
     double accuracy = 0;
     double correctPrediction = 0;
@@ -155,35 +142,80 @@ double WikiArticleScanner::accuracyOfKeyWordPrediction(const std::set<std::strin
             ++correctPrediction;
         }
     }
-    // std::cout << "correctPrediction: " << correctPrediction << std::endl;
-    // std::cout << "predictedSet.size(): " << predictedSet.size() << std::endl;
     return (correctPrediction/predictedSet.size());
+}
+
+std::set<std::string> WikiArticleScanner::getKeyprasenessKeywords() {
+    std::set<std::string> keywordSet;
+    std::map<std::string, int64_t> keyPhrasenessMap;
+    for (auto&& wordIter = m_wordFrequency.begin(); wordIter != m_wordFrequency.end(); ++wordIter) {
+        int64_t keyprasenessProbability = 0;
+        if (m_wordFrequency[wordIter->first] > 0) {
+            keyprasenessProbability =  m_keywordFrequency[wordIter->first] / m_wordFrequency[wordIter->first];
+        } else {
+            double eps = 1e-6;
+            keyprasenessProbability =  m_keywordFrequency[wordIter->first] / eps;
+        }
+        keyPhrasenessMap.insert({wordIter->first, keyprasenessProbability});
+    }
+
+    std::multimap<int64_t,std::string> keyphrasenessScores;
+    for (auto&& keyphrasenessIter = keyPhrasenessMap.begin(); keyphrasenessIter != keyPhrasenessMap.end(); ++keyphrasenessIter) {
+        keyphrasenessScores.insert({keyphrasenessIter->second*1000, keyphrasenessIter->first});
+    }
+
+    const int64_t numberOfKeyWords = m_termFrequencies.size() * 6 / 100;	
+	int64_t count = 0;
+	std::multimap<int64_t,std::string>::const_iterator bestKeyphrasenessIter = keyphrasenessScores.end();
+    while (count != numberOfKeyWords && bestKeyphrasenessIter != keyphrasenessScores.begin()) {
+    	--bestKeyphrasenessIter;
+    	keywordSet.insert(bestKeyphrasenessIter->second);
+    	++count;
+    }    
+    return keywordSet;
+}
+
+void WikiArticleScanner::analyzeArticles(const wiki_article_t& wikiArticle) {
+    
+    int64_t numberOfArticles = 0;
+    performTF(wikiArticle);
+    for (pugi::xml_node page: m_xmlDocument.child("mediawiki").children("page"))
+    {
+        auto&& revision = page.child("revision");
+        std::string rawText = revision.child("text").child_value();
+
+        if (rawText.size() >= 1024) {
+            std::string processedText = toLower(rawText);
+            processedText.erase(remove(processedText.begin(), processedText.end(), '['), processedText.end());
+            processedText.erase(remove(processedText.begin(), processedText.end(), ']'), processedText.end());
+            std::string text = toLower(rawText);
+            performIDFPerDocument(processedText,text);
+            ++numberOfArticles;
+        }    
+    }
+    performTFIDF(numberOfArticles);
 }
 
 int main()
 {
     std::unique_ptr<WikiArticleScanner> wikiScanner = std::make_unique<WikiArticleScanner>("smalltext.xml");
 
-    wikiScanner->parseArticles();
-    std::unique_ptr<wiki_article_t> wikiArticle = wikiScanner->getArticleAt(0);
-    std::cout << wikiArticle->title_ << std::endl;
+    wiki_article_t firstWikiArticle = wikiScanner->getFirstArticle();
+    std::cout << "title: " << firstWikiArticle.title_ << std::endl;
 
-    std::set<std::string> tfIdfKeywords = wikiScanner->getTfIdfKeywords(*wikiArticle);
-    std::cout << "number of tf-idf keywords: " << tfIdfKeywords.size() << std::endl;
+    wikiScanner->analyzeArticles(firstWikiArticle);
 
-    // for (auto&& keyWordIter = tfIdfKeywords.begin(); keyWordIter != tfIdfKeywords.end(); ++keyWordIter) {
-    //     std::cout << *keyWordIter << std::endl;
-    // }
-
-    std::set<std::string> actualKeywords = wikiScanner->getKeyWordsPerArticle(*wikiArticle);
+    std::set<std::string> actualKeywords = wikiScanner->getKeyWordsPerArticle(firstWikiArticle);
     std::cout << "number of actual keywords: " << actualKeywords.size() << std::endl;
-
-    // for (auto&& keywordIter = actualKeywords.begin(); keywordIter != actualKeywords.end(); ++keywordIter) {
-    //     std::cout << *keywordIter << std::endl;
-    // }
+    
+    std::set<std::string> tfIdfKeywords = wikiScanner->getTfIdfKeywords();
+    std::cout << "number of keywords (6%): " << tfIdfKeywords.size() << std::endl;
     double tfIdfAccuracy = wikiScanner->accuracyOfKeyWordPrediction(tfIdfKeywords,actualKeywords);
-
     std::cout << "accuracy using tf-idf: " << tfIdfAccuracy << std::endl;
+    
+    std::set<std::string> keyprasenessKeywords = wikiScanner->getKeyprasenessKeywords();
+    double keyprasenessAccuracy = wikiScanner->accuracyOfKeyWordPrediction(keyprasenessKeywords,actualKeywords);
+    std::cout << "accuracy using keyphraseness: " << keyprasenessAccuracy << std::endl;
 
     return 0;
 }

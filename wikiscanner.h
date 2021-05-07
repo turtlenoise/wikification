@@ -18,22 +18,23 @@ struct wiki_article_t {
 class WikiArticleScanner {
 public:
     WikiArticleScanner(const std::string& documentName);
-    void parseArticles();
-    std::unique_ptr<wiki_article_t> getArticleAt(const int64_t position);
+    wiki_article_t getFirstArticle();
+    void analyzeArticles(const wiki_article_t& wikiArticle);
     std::set<std::string> getKeyWordsPerArticle(const wiki_article_t& wikiArticle);
-    std::set<std::string> getTfIdfKeywords(const wiki_article_t& wikiArticle);
     double accuracyOfKeyWordPrediction(const std::set<std::string>& predictedSet, const std::set<std::string>& actualSet);
+    std::set<std::string>  getTfIdfKeywords();
+    std::set<std::string> getKeyprasenessKeywords();
+
 private:
-    void performTF();
-    void performIDF();
-    void performTFIDF();
-    std::set<std::string>  getTfIdfKeyWordSet();
+    void performTF(const wiki_article_t& wikiArticle);
+    void performIDFPerDocument(const std::string& processedText, const std::string& text);
+    void performTFIDF(int64_t numberOfArticles);
     std::string toLower(std::string& s);
 
     std::map<std::string,int64_t> m_termFrequencies;
-    std::map<std::string,int64_t> m_wordFrequencyIDF;
+    std::map<std::string,int64_t> m_wordFrequency;
+    std::map<std::string,int64_t> m_keywordFrequency;
     std::map<std::string,int64_t> m_tfIdfScoreForWords;
     wiki_article_t m_wikiArticle;
-    std::vector<std::unique_ptr<wiki_article_t>> m_wikipediaArticles;
     pugi::xml_document m_xmlDocument;
 };
